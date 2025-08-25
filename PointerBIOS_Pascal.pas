@@ -14,31 +14,32 @@ var
   CursorW, CursorH: Word;
   PointerBIOS_Running: Boolean;
   CursorBitmap: array of LongWord;
-  FrameBuffer: ^LongWord = Ptr($E0000000,0);
+  FrameBuffer: ^LongWord = Ptr($E0000000,0); // VESA framebuffer
+  BMPBuffer: array of Byte;
 
 procedure LoadBMP(bmpPath: string);
-var f: File;
-    size, pixOffset, x, y: LongWord;
-    buffer: array of Byte;
-    pix: ^LongWord;
+var
+  f: File;
+  size, pixOffset, x, y: LongWord;
+  pix: ^LongWord;
 begin
   Assign(f, bmpPath);
-  Reset(f,1);
+  Reset(f,1); // binary mode
   size := FileSize(f);
-  SetLength(buffer, size);
-  BlockRead(f, buffer[0], size);
+  SetLength(BMPBuffer, size);
+  BlockRead(f, BMPBuffer[0], size);
   Close(f);
 
-  CursorW := PLongWord(@buffer[18])^;
-  CursorH := PLongWord(@buffer[22])^;
-  pixOffset := PLongWord(@buffer[10])^;
-
+  CursorW := PLongWord(@BMPBuffer[18])^;
+  CursorH := PLongWord(@BMPBuffer[22])^;
+  pixOffset := PLongWord(@BMPBuffer[10])^;
   SetLength(CursorBitmap, CursorW*CursorH);
-  pix := @buffer[pixOffset];
+  pix := @BMPBuffer[pixOffset];
 
+  // Copy pixels with vertical flip
   for y := 0 to CursorH-1 do
     for x := 0 to CursorW-1 do
-      CursorBitmap[y*CursorW+x] := pix[(CursorH-1-y)*CursorW+x]; // flip vertically
+      CursorBitmap[y*CursorW+x] := pix[(CursorH-1-y)*CursorW + x]; // flip vertically
 end;
 
 procedure DrawCursor;
@@ -48,7 +49,7 @@ begin
     for x := 0 to CursorW-1 do
     begin
       pix := CursorBitmap[y*CursorW+x];
-      if (pix shr 24) = 0 then Continue; // alpha=0 = transparent
+      if (pix shr 24) = 0 then Continue; // alpha=0 transparent
       FrameBuffer^[(CursorY+y)*1024 + (CursorX+x)] := pix;
     end;
 end;
@@ -64,7 +65,7 @@ end;
 procedure PointerBIOS_Init(bmpPath: string);
 var regs: Registers;
 begin
-  { Set VESA 1024x768x32 }
+  // Set VESA 1024x768x32
   regs.ax := $4F02;
   regs.bx := $118;
   Intr($10, regs);
@@ -75,7 +76,6 @@ begin
   while PointerBIOS_Running do
   begin
     OldX := CursorX; OldY := CursorY;
-
     regs.ax := 3;
     Intr($33, regs);
     CursorX := regs.cx;
