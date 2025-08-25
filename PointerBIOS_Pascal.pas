@@ -5,6 +5,7 @@ uses Dos;
 
 procedure PointerBIOS_Init(bmpPath: string);
 procedure PointerBIOS_Remove;
+function PointerBIOS_GetButton: Byte; // 1=left, 2=middle, 3=right
 
 implementation
 
@@ -14,8 +15,9 @@ var
   CursorW, CursorH: Word;
   PointerBIOS_Running: Boolean;
   CursorBitmap: array of LongWord;
-  FrameBuffer: ^LongWord = Ptr($E0000000,0); // VESA framebuffer
+  FrameBuffer: ^LongWord = Ptr($E0000000,0);
   BMPBuffer: array of Byte;
+  MouseButtons: Word;
 
 procedure LoadBMP(bmpPath: string);
 var
@@ -24,7 +26,7 @@ var
   pix: ^LongWord;
 begin
   Assign(f, bmpPath);
-  Reset(f,1); // binary mode
+  Reset(f,1);
   size := FileSize(f);
   SetLength(BMPBuffer, size);
   BlockRead(f, BMPBuffer[0], size);
@@ -36,10 +38,9 @@ begin
   SetLength(CursorBitmap, CursorW*CursorH);
   pix := @BMPBuffer[pixOffset];
 
-  // Copy pixels with vertical flip
   for y := 0 to CursorH-1 do
     for x := 0 to CursorW-1 do
-      CursorBitmap[y*CursorW+x] := pix[(CursorH-1-y)*CursorW + x]; // flip vertically
+      CursorBitmap[y*CursorW+x] := pix[(CursorH-1-y)*CursorW + x];
 end;
 
 procedure DrawCursor;
@@ -49,7 +50,7 @@ begin
     for x := 0 to CursorW-1 do
     begin
       pix := CursorBitmap[y*CursorW+x];
-      if (pix shr 24) = 0 then Continue; // alpha=0 transparent
+      if (pix shr 24) = 0 then Continue;
       FrameBuffer^[(CursorY+y)*1024 + (CursorX+x)] := pix;
     end;
 end;
@@ -62,12 +63,28 @@ begin
       FrameBuffer^[(OldY+y)*1024 + (OldX+x)] := 0;
 end;
 
+procedure PointerBIOS_UpdateMouse;
+var regs: Registers;
+begin
+  regs.ax := 3; // get mouse position and button status
+  Intr($33, regs);
+  CursorX := regs.cx;
+  CursorY := regs.dx;
+  MouseButtons := regs.bx; // bit 0 = left, 1 = right, 2 = middle
+end;
+
+function PointerBIOS_GetButton: Byte;
+begin
+  if (MouseButtons and 1) <> 0 then Exit(1);      // left
+  if (MouseButtons and 4) <> 0 then Exit(2);      // middle
+  if (MouseButtons and 2) <> 0 then Exit(3);      // right
+  Result := 0;
+end;
+
 procedure PointerBIOS_Init(bmpPath: string);
 var regs: Registers;
 begin
-  // Set VESA 1024x768x32
-  regs.ax := $4F02;
-  regs.bx := $118;
+  regs.ax := $4F02; regs.bx := $118; // VESA 1024x768x32
   Intr($10, regs);
 
   LoadBMP(bmpPath);
@@ -76,10 +93,7 @@ begin
   while PointerBIOS_Running do
   begin
     OldX := CursorX; OldY := CursorY;
-    regs.ax := 3;
-    Intr($33, regs);
-    CursorX := regs.cx;
-    CursorY := regs.dx;
+    PointerBIOS_UpdateMouse;
 
     EraseCursor;
     DrawCursor;
